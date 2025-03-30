@@ -1,0 +1,485 @@
+---
+title: 'Stewart artificial selection lineages: thermal Plasticity experiment'
+author: "Ian Dworkin"
+date: "`r format(Sys.time(),'%d %b %Y')`"
+output:
+  html_document:
+    keep_md: yes
+    number_sections: yes
+    toc: yes
+  pdf_document:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(digits = 3)
+```
+
+
+## Load libraries
+```{r}
+require(car)
+require(emmeans)
+require(ggplot2)
+require(lme4)
+require(glmmTMB)
+require(lmerTest)
+require(effects)
+require(predictmeans)
+require(ggbeeswarm)
+require(ggdist)
+require(ggridges)
+require(cowplot)
+```
+
+
+```{r}
+pref_theme <- theme_classic() +
+  theme(text = element_text(size = 14))
+```
+
+
+## load data and do quality checks
+
+```{r}
+size_dat <- read.csv("../data/AS_LotithTempPlasticity.csv", h = T,
+                     stringsAsFactors = TRUE)
+
+str(size_dat)
+levels(size_dat$Treat)
+
+head(size_dat)
+
+with(size_dat, table(Sex, Treat, Temp))
+```
+
+
+### check the class of some objects so they are what we need for analysis (i.e. factors instead of integers)
+
+sex, selection, replicate, sampling, trait, individual_ID and repeat_measure should all be factors.
+
+```{r}
+str(size_dat)
+names(size_dat)
+
+size_dat$TempF <- size_dat$Temp # Temperature, coded as a factor.
+names(size_dat)
+
+# use lapply to convert strings to factors where we need them
+size_dat[, c(3,4,7)] <- lapply(size_dat[, c(3,4,7)], factor)
+str(size_dat) # check that it behaves as expected
+
+size_dat$Treat <- relevel(size_dat$Treat, "LHm")
+```
+
+
+
+## log transform size
+
+I may not use it, but we should always check.
+
+From $mm$ to $\mu m$ and then $log_2$ transformed
+```{r}
+size_dat$log2_thorax <- log(1000*size_dat$Thorax, base = 2)
+```
+
+
+labels
+```{r}
+levels(size_dat$Treat) <- c("LHm", "Control", "Reversal", "Large", "Small")
+  
+treat.labs <- c(expression(LH^M), "Control", "Reversal", "Large", "Small")
+
+names(treat.labs) <- c(levels(size_dat$Treat))
+```
+
+
+
+### Now check some basic data characteristics
+
+Let's make sure we don't have any really obvious outliers (like something 10 times too big or ten times too small). Also make sure mean and median are pretty close.
+
+```{r}
+with(size_dat,
+     tapply(Thorax, interaction(Treat, TempF, Sex, drop = T ), quantile, 
+            probs = c(0,0.005, 0.02, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95,0.98,0.99, 1)))
+
+with(size_dat,
+     tapply(Thorax, interaction(Treat, TempF, Sex, drop = T ), mean))
+```
+
+
+
+We could also just look at min and max for each as a check.
+```{r}
+with(size_dat, tapply(Thorax,
+                      interaction(Treat, TempF, Sex, drop = T ), 
+                      range))
+```
+
+
+
+
+### graphical summaries of the raw data
+
+I am providing a few different ways of plotting this. You can choose which you think is best to make your points.
+
+These all show the same thing, just in different ways. Mostly a matter of preference depending on what you want to highlight in your paper.
+
+```{r}
+ggplot(size_dat, aes( y = Thorax, x = TempF, col = Treat:Sex)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_point(size = 1.25, alpha = 0.25, 
+                position=position_jitterdodge(0.5), show.legend= FALSE) +
+  labs( y = "length (mm)") +
+  theme_classic() +
+  theme(text = element_text(size = 24))
+```
+
+
+```{r}
+# Same as above faceted by sex
+ggplot(size_dat, aes( y = Thorax, x = Treat, col = TempF)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_point(size = 1.25, alpha = 0.25, 
+                position=position_jitterdodge(0.5), show.legend= FALSE) +
+  labs( y = "length (mm)") +
+  facet_wrap(~ Sex) +
+  theme_classic() +
+  theme(text = element_text(size = 18),
+        axis.text.x = element_text(angle = 45, size = 12, vjust = 0.6))
+```
+
+
+```{r}
+# log transformed
+ggplot(size_dat, aes( y = log2_thorax, x = Treat, col = TempF)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_point(size = 1.25, alpha = 0.25, 
+                position=position_jitterdodge(0.5), show.legend= FALSE) +
+  labs( y = "thorax length log2 (µm)") +
+  facet_wrap(~ Sex) +
+  theme_classic() +
+  theme(text = element_text(size = 24),
+        axis.text.x = element_text(angle = 45, size = 12, vjust = 0.6))
+```
+
+
+```{r}
+# violin plots as an alternative. Using log2 transformed. 
+ggplot(size_dat, aes( y = log2_thorax, col = Treat, x = TempF)) +
+  geom_violin(aes(fill = Treat)) +
+  labs( y = "length, log2 (µm)") +
+  facet_wrap(~ Sex) +
+  theme_classic() +
+  theme(text = element_text(size = 20))
+```
+
+Or beeswarm
+
+```{r}
+ggplot(size_dat, aes( y = log2_thorax, col = Treat, x = TempF)) +
+  geom_quasirandom(alpha = 0.5) +
+  labs(y = "length, log2 (µm)") +
+  facet_wrap(~ Sex) +
+  theme_classic() +
+  theme(text = element_text(size = 20))
+```
+
+
+```{r}
+ggplot(size_dat, aes( y = log2_thorax, x = Treat, col = TempF, shape = TempF)) +
+  geom_quasirandom(alpha = 0.5) +
+  labs(y = "length, log2 (µm)") +
+  facet_wrap(~ Sex) +
+  theme_classic() +
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(angle = 45, size = 12, vjust = 0.6))
+```
+
+
+```{r}
+ggplot(size_dat, aes( y = log2_thorax, x = TempF, col = Sex, shape = Sex)) +
+  geom_quasirandom(alpha = 0.5, method = "tukeyDense") +
+  labs(#y = "length, log2 (µm)", 
+       y = expression(thorax~length~log[2]~mu~m),
+       x = "Temperature (°C)") +
+  theme_bw() +
+  facet_wrap(~ Treat, labeller = labeller(Treat = treat.labs)) +
+  theme(text = element_text(size = 15),
+        legend.position = "none")
+```
+
+
+## Additional plots of raw data to examine variation by vials and replicate block
+
+
+```{r}
+ggplot(size_dat, 
+       aes( y = Thorax, x = Treat, col = TempF:Sex)) +
+  geom_boxplot(outlier.shape = NA) + 
+  geom_point(size = 1.25, alpha = 0.25, 
+                position=position_jitterdodge(0.5), show.legend= FALSE) +
+  labs( y = "length (mm)") +
+  facet_wrap(~ Rep) +
+  ggtitle("thorax") +
+  theme_classic() +
+  theme(text = element_text(size = 20),,
+        axis.text.x = element_text(angle = 45, size = 12, vjust = 0.6))
+```
+
+
+
+### Real models (these have the info you want)
+
+ temperature as a continuous predictor, where 0 represents the lowest tempereature used in the experiment.
+ 
+```{r}
+mean(size_dat$Temp)
+size_dat$TempC <- size_dat$Temp - min(size_dat$Temp)
+mean(size_dat$TempC)
+
+size_dat$TempC_2 <- size_dat$Temp - mean(size_dat$Temp)
+```
+
+
+## About the analysis
+
+
+Replicate Block is a bit hard to decide on whether to fit as fixed or random. It is obviously a nuisance variable, but with only two blocks it is not easy to estimate. I did include it as a random effect
+
+Vial is nested within the joint levels of Treatment, TempF and Rep
+
+
+
+## for the check of the evolved differences 
+from the normal (what they evolved at) rearing temperature of 25°C
+
+
+```{r}
+mod1_thorax__25C_log <- lmer(log2(1000*Thorax) ~ Sex*Treat +
+                    + (1 | Rep) 
+                    + (1| Rep:Treat:Vial),
+           REML = FALSE,          
+           data = size_dat,
+           subset = size_dat$Temp == 25)
+
+summary(mod1_thorax__25C_log)
+```
+
+
+```{r}
+estimates_25C <- emmeans(mod1_thorax__25C_log, ~ Treat | Sex)
+
+estimates_25C
+
+contrasts_To_control <- contrast(estimates_25C, method = "trt.vs.ctrl", ref = "Control")
+
+contrasts_To_control
+
+confint(contrasts_To_control)
+```
+
+please note, to recapitulate figures from the paper, remove the `type = "response"` from the emmeans statement so it will be displayed on the log2 scale. 
+
+first panel (p1)
+```{r}
+p1 <- plot(contrasts_To_control) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.5) +
+  xlab(expression(paste("∆thorax length, ", log[2], " µm"))) + 
+  ylab("") +
+  theme_bw() +
+  theme(text = element_text(size = 15), 
+        legend.position = "none",
+        legend.title = element_blank())
+  
+
+p1
+```
+
+
+using log2 µm, (which will allow us to focus on proportional changes.)
+
+```{r}
+mod1_thorax_log <- lmer(log2(1000*Thorax) ~ Sex*Treat*TempC +
+                    + (1 | Rep) 
+                    + (1 | Rep:Treat:TempF:Vial),
+                    REML = FALSE,  
+                    data = size_dat )
+
+summary(mod1_thorax_log)
+
+Anova(mod1_thorax_log)
+```
+
+
+
+Generate model fitted values and their CIs
+```{r}
+pred_vals_slopes <- as.data.frame(predictorEffect("TempC", mod1_thorax_log, 
+                                                  x.levels = 13))
+
+pred_vals_slopes$Temp <- pred_vals_slopes$TempC + 18
+
+pred_vals_slopes$log2_thorax <- pred_vals_slopes$fit
+```
+
+
+### panel b
+
+```{r}
+pred_vals_slopes$Treat <- relevel(pred_vals_slopes$Treat, "LHm")
+```
+
+
+```{r}
+p2 <- ggplot(data = pred_vals_slopes, aes(x = Temp, y = log2_thorax, colour = Sex)) +
+  facet_wrap(~Treat, nrow = 1) +
+  geom_line() +
+  geom_ribbon(aes(ymin = pred_vals_slopes$lower, 
+                  ymax = pred_vals_slopes$upper,
+                  x = Temp,
+                  colour = Sex), alpha = 0.175, 
+               linetype = 0) +
+  geom_jitter(data = size_dat,
+              aes(y = log2_thorax, x = Temp), alpha = 0.2, width = 1) +
+  ylab(expression(paste("Thorax length, ", log[2], " µm"))) + 
+  xlab("Rearing temperature (°C)") + 
+  theme_bw() +
+  theme(text = element_text(size = 15), 
+        legend.position = "top",
+        legend.title = element_blank())
+
+
+p2
+```
+
+
+
+## Changes in slopes
+
+
+### What is the magnitude of change in the slope of the plasticity response, by experimental treatment.
+
+Note that in the paper, the figures show the contrast computed on the log2 scale. 
+
+```{r}
+slopes2 <- emtrends(mod1_thorax_log,  var = "TempC",  
+                            specs = ~ Treat | Sex)
+
+
+plot(slopes2) + 
+  labs(x = "Plasticity", y = "") +
+  theme_bw() +
+  theme(text = element_text(size = 18))
+
+# relative to LHm
+slope_contrasts_LHm <- contrast(slopes2, 
+                             "trt.vs.ctrl", ref = "LHm",
+                                 by = "Sex")
+
+#excluding LHm, relative to controls
+slope_contrasts_control <- contrast(slopes2, 
+                             "trt.vs.ctrl", ref = "Control", exclude = 1, 
+                                 by = "Sex")
+
+confint(slope_contrasts_control)
+```
+
+
+```{r}
+p3 <- plot(slope_contrasts_control) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.5) + 
+  labs(x = "∆plasticity relative to control", y = "") +
+  scale_x_continuous(n.breaks = 4) + 
+  theme_bw() +
+  theme(text = element_text(size = 15), 
+        legend.position = "none",
+        legend.title = element_blank())
+
+p3
+```
+
+
+```{r}
+plot(slope_contrasts_LHm) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.5) + 
+  labs(x = "∆plasticity relative to LHm", y = "") +
+  theme_bw() +
+  theme(text = element_text(size = 15))
+```
+
+Just to help understand what the output is telling us
+```{r}
+mod1_thorax <- lmer(1000*Thorax ~ Sex*Treat*TempC +
+                    + (1 | Rep) 
+                    + (1| Rep:Treat:TempF:Vial),
+                    REML = FALSE,
+                    data = size_dat )
+
+
+slopes2_b <- emtrends(mod1_thorax,  var = "TempC",  
+                            specs = ~ Treat | Sex)
+
+slopes2_b 
+
+
+slope_contrasts_control_b <- contrast(slopes2_b,
+                             "trt.vs.ctrl", ref = "Control", exclude = 1,
+                                 by = "Sex")
+
+confint(slope_contrasts_control_b)
+```
+
+
+## stitching together for the plot
+
+```{r}
+top_row <- plot_grid(p1, p3, 
+          label_size = 20,        
+          labels = c("A", "C"))
+
+fig_paper <- plot_grid(top_row, p2,
+          labels = c("", "B"),
+          label_size = 20,
+          ncol = 1)
+
+fig_paper
+
+
+save_plot("../outputs/fig_paper_file.png", fig_paper, base_height = 6.72, base_asp = 5/3, dpi = 1000)
+
+save_plot("../outputs/fig_paper_file.tiff", fig_paper, base_height = 6.72, base_asp = 5/3, dpi = 500 )
+```
+
+## Note below, this is for ID's personal interest in changes in SSD, not about the paper!
+
+The analysis below is because I was curious... Not about the paper *per se*
+### compute differences in SSD for slopes slope relative to control
+
+```{r}
+slope_treatment <- emtrends(mod1_thorax_log,  var = "TempC",  
+                            pairwise ~ Sex*Treat)
+
+SSD_for_slope_contrasts <- contrast(slope_treatment[[1]], 
+                                 interaction = c(Treat = "trt.vs.ctrl1", Sex = "pairwise"),
+                                 by = NULL)
+
+
+
+confint(SSD_for_slope_contrasts)
+
+plot(SSD_for_slope_contrasts) + 
+  geom_vline(xintercept = 0, lty = 2, alpha = 0.5) + 
+  labs(x = "change in dimorphism plasticity relative to control lineages", y = "comparison") +
+  theme_bw()
+```
+
+
+```{r}
+sessionInfo()
+```
+
